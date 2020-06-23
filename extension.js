@@ -68,7 +68,7 @@ const VitalsMenuButton = new Lang.Class({
             x_align: Clutter.ActorAlign.START,
             y_align: Clutter.ActorAlign.CENTER,
             reactive: true,
-            x_expand:true,
+            x_expand: true,
             pack_start: false
         });
 
@@ -85,7 +85,7 @@ const VitalsMenuButton = new Lang.Class({
         this._addSettingChangedSignal('position-in-panel', Lang.bind(this, this._positionInPanelChanged));
         this._addSettingChangedSignal('use-higher-precision', Lang.bind(this, this._higherPrecisionChanged));
 
-        let settings = [ 'alphabetize', 'include-public-ip', 'hide-zeros', 'unit', 'network-speed-format' ];
+        let settings = [ 'alphabetize', 'include-public-ip', 'hide-zeros', 'unit', 'network-speed-format', 'memory-measurement', 'storage-measurement' ];
         for (let setting of Object.values(settings))
             this._addSettingChangedSignal(setting, Lang.bind(this, this._redrawMenu));
 
@@ -95,7 +95,6 @@ const VitalsMenuButton = new Lang.Class({
 
         this._initializeMenu();
         this._initializeTimer();
-        //this.emit('style-changed');
     },
 
     _initializeMenu: function() {
@@ -120,38 +119,93 @@ const VitalsMenuButton = new Lang.Class({
             this.menu.addMenuItem(this._groups[sensor]);
         }
 
-        let panelSystem = Main.panel.statusArea.aggregateMenu._system;
+        // add separator
+        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
         let item = new PopupMenu.PopupBaseMenuItem({
             reactive: false,
             style_class: 'vitals-menu-button-container'
         });
 
-        // round preferences button
-        let prefsButton = panelSystem._createActionButton('preferences-system-symbolic', _("Preferences"));
-        prefsButton.connect('clicked', function() {
-            Util.spawn(["gnome-shell-extension-prefs", Me.metadata.uuid]);
-        });
-        item.actor.add(prefsButton, { expand: true, x_fill: false }); // 3.34?
+        let prefsButton, monitorButton, refreshButton;
 
-        // round monitor button
-        let monitorButton = panelSystem._createActionButton('utilities-system-monitor-symbolic', _("System Monitor"));
-        monitorButton.connect('clicked', function() {
-            Util.spawn(["gnome-system-monitor"]);
-        });
-        item.actor.add(monitorButton, { expand: true, x_fill: false }); // 3.34?
+        // Gnome 3.36 straight up removed round button support. No standard deprecation process. What the heck??
+        if (ExtensionUtils.versionCheck(['3.18', '3.20', '3.22', '3.24', '3.26', '3.28', '3.30', '3.32', '3.34'], Config.PACKAGE_VERSION)) {
+            // round refresh button
+            refreshButton = panelSystem._createActionButton('view-refresh-symbolic', _("Refresh"));
+            item.actor.add(refreshButton, { expand: true, x_fill: false }); // 3.34?
 
-        // round refresh button
-        let refreshButton = panelSystem._createActionButton('view-refresh-symbolic', _("Refresh"));
+            // round monitor button
+            monitorButton = panelSystem._createActionButton('utilities-system-monitor-symbolic', _("System Monitor"));
+            item.actor.add(monitorButton, { expand: true, x_fill: false }); // 3.34?
+
+            // round preferences button
+            let panelSystem = Main.panel.statusArea.aggregateMenu._system;
+            prefsButton = panelSystem._createActionButton('preferences-system-symbolic', _("Preferences"));
+            item.actor.add(prefsButton, { expand: true, x_fill: false }); // 3.34?
+        } else {
+            let customButtonBox = new St.BoxLayout({
+                style_class: 'vitals-button-box',
+                vertical: false,
+                clip_to_allocation: true,
+                x_align: Clutter.ActorAlign.CENTER,
+                y_align: Clutter.ActorAlign.CENTER,
+                reactive: true,
+                x_expand: true,
+                pack_start: false
+            });
+
+            // custom round refresh button
+            refreshButton = this._createRoundButton('view-refresh-symbolic', _("Refresh"));
+            customButtonBox.add_actor(refreshButton);
+
+            // custom round monitor button
+            monitorButton = this._createRoundButton('utilities-system-monitor-symbolic', _("System Monitor"));
+            customButtonBox.add_actor(monitorButton);
+
+            // custom round preferences button
+            prefsButton = this._createRoundButton('preferences-system-symbolic', _("Preferences"));
+            customButtonBox.add_actor(prefsButton);
+
+            item.actor.add_actor(customButtonBox);
+        }
+
         refreshButton.connect('clicked', Lang.bind(this, function(self) {
             this._sensors.resetHistory();
             this._values.resetHistory();
             this._updateTimeChanged();
         }));
-        item.actor.add(refreshButton, { expand: true, x_fill: false }); // 3.34?
 
-        // add separator and buttons
-        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        monitorButton.connect('clicked', Lang.bind(this, function(self) {
+            this.menu.actor.hide();
+            Util.spawn(["gnome-system-monitor"]);
+        }));
+
+        prefsButton.connect('clicked', Lang.bind(this, function(self) {
+            this.menu.actor.hide();
+
+            // Gnome 3.36 has a fancier way of opening preferences
+            if (typeof ExtensionUtils.openPrefs === 'function') {
+                ExtensionUtils.openPrefs();
+            } else {
+                Util.spawn(["gnome-shell-extension-prefs", Me.metadata.uuid]);
+            }
+        }));
+
+        // add buttons
         this.menu.addMenuItem(item);
+    },
+
+    _createRoundButton: function(iconName) {
+        let button = new St.Button({
+            style_class: 'message-list-clear-button button vitals-button-action'
+        });
+
+        button.child = new St.Icon({
+            icon_name: iconName
+        });
+
+        return button;
     },
 
     _removeMissingHotSensors: function(hotSensors) {
@@ -193,21 +247,24 @@ const VitalsMenuButton = new Lang.Class({
     },
 
     _createHotItem: function(key, gicon, value) {
-        let icon = this._defaultIcon(gicon);
+        let css_class = key.replace('__', '_').replace('-','_').split('_')[1];
+        let icon = this._defaultIcon(css_class, gicon);
+
         this._hotIcons[key] = icon;
-        this._menuLayout.add(icon, { expand: true, x_fill: false });
+        this._menuLayout.add_actor(icon)
 
         // don't add a label when no sensors are in the panel
         if (key == '_default_icon_') return;
 
         let label = new St.Label({
+            style_class: 'vitals-panel-label',
             text: (value)?value:'\u2026', // ...
             y_expand: true,
             y_align: Clutter.ActorAlign.CENTER
         });
 
         this._hotLabels[key] = label;
-        this._menuLayout.add(label, { expand: true, x_fill: false });
+        this._menuLayout.add_actor(label);
     },
 
     _higherPrecisionChanged: function() {
@@ -394,16 +451,15 @@ const VitalsMenuButton = new Lang.Class({
 
     _defaultLabel: function() {
         return new St.Label({
-            style_class: 'vitals-status-menu-item',
                y_expand: true,
                 y_align: Clutter.ActorAlign.CENTER
         });
     },
 
-    _defaultIcon: function(gicon) {
+    _defaultIcon: function(css_class, gicon) {
         let icon = new St.Icon({
             icon_name: "utilities-system-monitor-symbolic",
-          style_class: 'system-status-icon',
+          style_class: 'system-status-icon vitals-panel-icon-' + css_class,
             reactive: true
         });
 
@@ -478,7 +534,7 @@ function init() {
 function enable() {
     vitalsMenu = new VitalsMenuButton();
     let positionInPanel = vitalsMenu.positionInPanel;
-    Main.panel.addToStatusArea('vitalsMenu', vitalsMenu, positionInPanel == 'right' ? 0 : -1, positionInPanel);
+    Main.panel.addToStatusArea('vitalsMenu', vitalsMenu, positionInPanel == 'right' ? 1 : -1, positionInPanel);
 }
 
 function disable() {

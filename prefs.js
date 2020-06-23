@@ -54,6 +54,7 @@ const Settings = new Lang.Class({
     _bind_settings: function() {
         let widget;
 
+        // process sensor toggles
         let sensors = [ 'show-temperature', 'show-voltage', 'show-fan',
                         'show-memory', 'show-processor', 'show-system',
                         'show-network', 'show-storage', 'use-higher-precision',
@@ -70,8 +71,8 @@ const Settings = new Lang.Class({
             });
         }
 
-        sensors = [ 'position-in-panel', 'unit', 'network-speed-format' ];
-
+        // process individual drop down sensor preferences
+        sensors = [ 'position-in-panel', 'unit', 'network-speed-format', 'memory-measurement', 'storage-measurement', 'battery-slot' ];
         for (let key in sensors) {
             let sensor = sensors[key];
 
@@ -82,28 +83,29 @@ const Settings = new Lang.Class({
             });
         }
 
-        this._settings.bind(
-            'update-time',
-            this.builder.get_object('update-time'),
-            'value',
-            Gio.SettingsBindFlags.DEFAULT);
+        this._settings.bind('update-time', this.builder.get_object('update-time'), 'value', Gio.SettingsBindFlags.DEFAULT);
 
-        let sensor = 'storage-path';
-        widget = this.builder.get_object(sensor);
-        widget.set_text(this._settings.get_string(sensor));
-        widget.connect('changed', (widget) => {
-            let text = widget.get_text();
-            if (!text) text = '/';
-
-            this._settings.set_string(sensor, text);
-        });
-
-        sensors = [ 'temperature', 'network', 'storage' ];
-
+        // process individual text entry sensor preferences
+        sensors = [ 'storage-path' ];
         for (let key in sensors) {
             let sensor = sensors[key];
 
-            // Create dialog for intelligent autohide advanced settings
+            widget = this.builder.get_object(sensor);
+            widget.set_text(this._settings.get_string(sensor));
+
+            widget.connect('changed', (widget) => {
+                let text = widget.get_text();
+                if (!text) text = widget.get_placeholder_text();
+                this._settings.set_string(sensor, text);
+            });
+        }
+
+        // makes individual sensor preference boxes appear
+        sensors = [ 'temperature', 'network', 'storage', 'memory', 'battery' ];
+        for (let key in sensors) {
+            let sensor = sensors[key];
+
+            // create dialog for intelligent autohide advanced settings
             this.builder.get_object(sensor + '-prefs').connect('clicked', Lang.bind(this, function() {
                 let title = sensor.charAt(0).toUpperCase() + sensor.slice(1);
                 let dialog = new Gtk.Dialog({ title: _(title + ' Preferences'),
