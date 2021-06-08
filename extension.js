@@ -1,17 +1,14 @@
-const St = imports.gi.St;
+const {Clutter, Gio, St} = imports.gi;
 const Lang = imports.lang;
 const PanelMenu = imports.ui.panelMenu;
 const PopupMenu = imports.ui.popupMenu;
 const Main = imports.ui.main;
 const Util = imports.misc.util;
 const Mainloop = imports.mainloop;
-const Clutter = imports.gi.Clutter;
-const Gio = imports.gi.Gio;
 const ExtensionUtils = imports.misc.extensionUtils;
 const Me = ExtensionUtils.getCurrentExtension();
 Me.imports.helpers.polyfills;
 const Sensors = Me.imports.sensors;
-const Convenience = Me.imports.helpers.convenience;
 const Gettext = imports.gettext.domain(Me.metadata['gettext-domain']);
 const _ = Gettext.gettext;
 const MessageTray = imports.ui.messageTray;
@@ -27,7 +24,7 @@ const VitalsMenuButton = new Lang.Class({
     _init: function() {
         this.parent(St.Align.START);
 
-        this._settings = Convenience.getSettings();
+        this._settings = ExtensionUtils.getSettings('org.gnome.shell.extensions.vitals');
 
         this._sensorIcons = {
             'temperature' : { 'icon': 'temperature-symbolic.svg',
@@ -57,6 +54,7 @@ const VitalsMenuButton = new Lang.Class({
         this._hotLabels = {};
         this._hotIcons = {};
         this._groups = {};
+        this._widths = {};
 
         this._update_time = this._settings.get_int('update-time');
 
@@ -72,20 +70,14 @@ const VitalsMenuButton = new Lang.Class({
             pack_start: false
         });
 
-        this._drawMenu();
-
-        if (ExtensionUtils.versionCheck(['3.18', '3.20', '3.22', '3.24', '3.26', '3.28', '3.30', '3.32'], Config.PACKAGE_VERSION)) {
-            this.actor.add_actor(this._menuLayout);
-        } else {
-            this.add_actor(this._menuLayout);
-        }
-
+        this._drawMenu();     
+        this.actor.add_actor(this._menuLayout);
         this._settingChangedSignals = [];
         this._addSettingChangedSignal('update-time', Lang.bind(this, this._updateTimeChanged));
         this._addSettingChangedSignal('position-in-panel', Lang.bind(this, this._positionInPanelChanged));
         this._addSettingChangedSignal('use-higher-precision', Lang.bind(this, this._higherPrecisionChanged));
 
-        let settings = [ 'alphabetize', 'include-public-ip', 'hide-zeros', 'unit', 'network-speed-format', 'memory-measurement', 'storage-measurement' ];
+        let settings = [ 'alphabetize', 'include-public-ip', 'hide-zeros', 'unit', 'network-speed-format', 'memory-measurement', 'storage-measurement', 'fixed-widths' ];
         for (let setting of Object.values(settings))
             this._addSettingChangedSignal(setting, Lang.bind(this, this._redrawMenu));
 
@@ -127,60 +119,36 @@ const VitalsMenuButton = new Lang.Class({
             style_class: 'vitals-menu-button-container'
         });
 
-        let prefsButton, monitorButton, refreshButton;
+        let customButtonBox = new St.BoxLayout({
+            style_class: 'vitals-button-box',
+            vertical: false,
+            clip_to_allocation: true,
+            x_align: Clutter.ActorAlign.CENTER,
+            y_align: Clutter.ActorAlign.CENTER,
+            reactive: true,
+            x_expand: true,
+            pack_start: false
+        });
 
-        // Gnome 3.36 straight up removed round button support. No standard deprecation process. What the heck??
-        if (ExtensionUtils.versionCheck(['3.18', '3.20', '3.22', '3.24', '3.26', '3.28', '3.30', '3.32', '3.34'], Config.PACKAGE_VERSION)) {
-            // round refresh button
-            refreshButton = panelSystem._createActionButton('view-refresh-symbolic', _("Refresh"));
-            item.actor.add(refreshButton, { expand: true, x_fill: false }); // 3.34?
-
-            // round monitor button
-            monitorButton = panelSystem._createActionButton('utilities-system-monitor-symbolic', _("System Monitor"));
-            item.actor.add(monitorButton, { expand: true, x_fill: false }); // 3.34?
-
-            // round preferences button
-            let panelSystem = Main.panel.statusArea.aggregateMenu._system;
-            prefsButton = panelSystem._createActionButton('preferences-system-symbolic', _("Preferences"));
-            item.actor.add(prefsButton, { expand: true, x_fill: false }); // 3.34?
-        } else {
-            let customButtonBox = new St.BoxLayout({
-                style_class: 'vitals-button-box',
-                vertical: false,
-                clip_to_allocation: true,
-                x_align: Clutter.ActorAlign.CENTER,
-                y_align: Clutter.ActorAlign.CENTER,
-                reactive: true,
-                x_expand: true,
-                pack_start: false
-            });
-
-            // custom round refresh button
-            refreshButton = this._createRoundButton('view-refresh-symbolic', _("Refresh"));
-            customButtonBox.add_actor(refreshButton);
-
-            // custom round monitor button
-            monitorButton = this._createRoundButton('utilities-system-monitor-symbolic', _("System Monitor"));
-            customButtonBox.add_actor(monitorButton);
-
-            // custom round preferences button
-            prefsButton = this._createRoundButton('preferences-system-symbolic', _("Preferences"));
-            customButtonBox.add_actor(prefsButton);
-
-            item.actor.add_actor(customButtonBox);
-        }
-
+        // custom round refresh button
+        let refreshButton = this._createRoundButton('view-refresh-symbolic', _("Refresh"));
         refreshButton.connect('clicked', Lang.bind(this, function(self) {
             this._sensors.resetHistory();
             this._values.resetHistory();
             this._updateTimeChanged();
         }));
+        customButtonBox.add_actor(refreshButton);
 
+        // custom round monitor button
+        let monitorButton = this._createRoundButton('utilities-system-monitor-symbolic', _("System Monitor"));
         monitorButton.connect('clicked', Lang.bind(this, function(self) {
             this.menu.actor.hide();
             Util.spawn(["gnome-system-monitor"]);
         }));
+        customButtonBox.add_actor(monitorButton);
 
+        // custom round preferences button
+        let prefsButton = this._createRoundButton('preferences-system-symbolic', _("Preferences"));
         prefsButton.connect('clicked', Lang.bind(this, function(self) {
             this.menu.actor.hide();
 
@@ -191,6 +159,10 @@ const VitalsMenuButton = new Lang.Class({
                 Util.spawn(["gnome-shell-extension-prefs", Me.metadata.uuid]);
             }
         }));
+        customButtonBox.add_actor(prefsButton);
+
+        // now add the buttons to the top bar
+        item.actor.add_actor(customButtonBox);
 
         // add buttons
         this.menu.addMenuItem(item);
@@ -260,8 +232,12 @@ const VitalsMenuButton = new Lang.Class({
             style_class: 'vitals-panel-label',
             text: (value)?value:'\u2026', // ...
             y_expand: true,
-            y_align: Clutter.ActorAlign.CENTER
+            y_align: Clutter.ActorAlign.START
+            //,width: 10
         });
+
+        // attempt to prevent ellipsizes
+        label.get_clutter_text().ellipsize = 0;
 
         this._hotLabels[key] = label;
         this._menuLayout.add_actor(label);
@@ -358,8 +334,28 @@ const VitalsMenuButton = new Lang.Class({
         //global.log('...label=' + label, 'value=' + value, 'type=' + type, 'key=' + key);
 
         // update sensor value in menubar
-        if (this._hotLabels[key])
+        if (this._hotLabels[key]) {
             this._hotLabels[key].set_text(value);
+
+            // support for fixed widths #55 (beta)
+            if (this._settings.get_boolean('fixed-widths')) {
+                if (typeof this._widths[key] == 'undefined')
+                    this._widths[key] = this._hotLabels[key].width;
+
+                //global.log('*******************');
+                //global.log('label=' + label);
+                //global.log('width before=' + this._widths[key]);
+
+                let width2 = this._hotLabels[key].get_clutter_text().width;
+                if (width2 > this._widths[key]) {
+                    global.log('setting width to ' + width2);
+                    this._hotLabels[key].set_width(width2);
+                    this._widths[key] = width2;
+                }
+
+                //global.log('width after=' + this._hotLabels[key].width);
+            }
+        }
 
         // have we added this sensor before?
         let item = this._sensorMenuItems[key];
@@ -386,7 +382,7 @@ const VitalsMenuButton = new Lang.Class({
         let gicon = Gio.icon_new_for_string(Me.path + '/icons/' + this._sensorIcons[type][icon]);
 
         let item = new MenuItem.MenuItem(gicon, key, sensor.label, sensor.value);
-        item.connect('activate', Lang.bind(this, function(self) {
+        item.connect('activate', (self) => {
             let hotSensors = this._settings.get_strv('hot-sensors');
 
             if (self.checked) {
@@ -423,10 +419,8 @@ const VitalsMenuButton = new Lang.Class({
             // this code is called asynchronously - make sure to save it for next round
             this._saveHotSensors(hotSensors);
 
-            //this.emit('activate', self);
-            //self.disconnect();
             return true;
-        }));
+        });
 
         if (this._hotLabels[key]) {
             item.checked = true;
@@ -480,14 +474,6 @@ const VitalsMenuButton = new Lang.Class({
         this._sensors.query(Lang.bind(this, function(label, value, type, format) {
             let key = '_' + type.split('-')[0] + '_' + label.replace(' ', '_').toLowerCase() + '_';
 
-/*
-            if (key == '_temperature_package_id 0_' && value >= 50000)
-                this._warnings.push(label + ' is ' + value);
-
-            if (key == '_system_load_1m_' && value >= 2)
-                this._warnings.push(label + ' is ' + value);
-*/
-
             let items = this._values.returnIfDifferent(label, value, type, format, key);
             for (let item of Object.values(items))
                 this._updateDisplay(_(item[0]), item[1], item[2], item[3]);
@@ -510,6 +496,10 @@ const VitalsMenuButton = new Lang.Class({
     destroy: function() {
         Mainloop.source_remove(this._refreshTimeoutId);
 
+        for (let key in this._sensorMenuItems)
+            if (typeof this._sensorMenuItems[key] != 'undefined')
+                this._sensorMenuItems[key].destroy();
+
         for (let signal of Object.values(this._settingChangedSignals))
             this._settings.disconnect(signal);
 
@@ -519,16 +509,8 @@ const VitalsMenuButton = new Lang.Class({
 });
 
 function init() {
-    Convenience.initTranslations();
-
-    // load correct menuItem depending on Gnome version
-    if (ExtensionUtils.versionCheck(['3.18', '3.20', '3.22', '3.24', '3.26', '3.28'], Config.PACKAGE_VERSION)) {
-        MenuItem = Me.imports.menuItemLegacy;
-    } else if (ExtensionUtils.versionCheck(['3.30', '3.32'], Config.PACKAGE_VERSION)) {
-        MenuItem = Me.imports.menuItemOld;
-    } else {
-        MenuItem = Me.imports.menuItem;
-    }
+    ExtensionUtils.initTranslations('vitals');
+    MenuItem = Me.imports.menuItem;
 }
 
 function enable() {

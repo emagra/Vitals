@@ -29,6 +29,7 @@ const Me = imports.misc.extensionUtils.getCurrentExtension();
 const FileModule = Me.imports.helpers.file;
 const Gettext = imports.gettext.domain(Me.metadata['gettext-domain']);
 const _ = Gettext.gettext;
+const NM = imports.gi.NM;
 
 let GTop, hasGTop = true;
 try {
@@ -63,6 +64,14 @@ var Sensors = new Lang.Class({
         }
     },
 
+    _refreshIPAddress: function(callback) {
+        // check IP address
+        new FileModule.File('https://corecoding.com/vitals.php').read().then(contents => {
+            let obj = JSON.parse(contents);
+            this._returnValue(callback, 'Public IP', obj['IPv4'], 'network', 'string');
+        }).catch(err => { });
+    },
+
     _findStorageDevice: function() {
         new FileModule.File('/proc/mounts').read().then(lines => {
             lines = lines.split("\n");
@@ -73,9 +82,7 @@ var Sensors = new Lang.Class({
                     break;
                 }
             }
-        }).catch(err => {
-            global.log(err);
-        });
+        }).catch(err => { });
     },
 
     query: function(callback) {
@@ -244,7 +251,16 @@ var Sensors = new Lang.Class({
     },
 
     _queryBattery: function(callback) {
-        let battery_path = '/sys/class/power_supply/BAT' + this._settings.get_int('battery-slot') + '/';
+        let battery_slot = this._settings.get_int('battery-slot');
+
+        // addresses issue #161
+        let batt_key = 'BAT';
+        if (battery_slot == 3) {
+            batt_key = 'CMB';
+            battery_slot = 0;
+        }
+
+        let battery_path = '/sys/class/power_supply/' + batt_key + battery_slot + '/';
 
         new FileModule.File(battery_path + 'status').read().then(value => {
             this._returnValue(callback, 'State', value, 'battery', '');
@@ -358,11 +374,7 @@ var Sensors = new Lang.Class({
             if (this._next_public_ip_check <= 0) {
                 this._next_public_ip_check = 3600;
 
-                // check uptime
-                new FileModule.File('https://corecoding.com/vitals.php').read().then(contents => {
-                    let obj = JSON.parse(contents);
-                    this._returnValue(callback, 'Public IP', obj['IPv4'], 'network', 'string');
-                }).catch(err => { });
+                this._refreshIPAddress(callback);
             }
 
             this._next_public_ip_check -= diff;
